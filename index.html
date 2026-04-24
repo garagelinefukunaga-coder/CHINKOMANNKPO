@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Retro Table Baseball</title>
+  <style>
+    :root {
+      --bg: #0f1a2d;
+      --panel: #23355d;
+      --trim: #ffca5f;
+      --accent: #ff6b6b;
+      --grass: #2c9042;
+      --dirt: #9b4f28;
+      --pixel-shadow: 0 0 0 2px #000, 4px 4px 0 0 #000;
+      font-family: "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 15%, #243f70 0 8%, transparent 9%),
+        radial-gradient(circle at 80% 22%, #243f70 0 8%, transparent 9%),
+        linear-gradient(180deg, #1a2c50 0%, #0f1a2d 55%);
+      color: #fff7d6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+      touch-action: manipulation;
+    }
+
+    .cabinet {
+      width: min(94vw, 520px);
+      border: 4px solid #000;
+      background: #172a4a;
+      box-shadow: var(--pixel-shadow);
+      image-rendering: pixelated;
+    }
+
+    .scoreboard {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      padding: 10px;
+      background: repeating-linear-gradient(90deg, #1d3158 0 8px, #1a2b4b 8px 16px);
+      border-bottom: 4px solid #000;
+    }
+
+    .tile {
+      background: #091426;
+      border: 2px solid #000;
+      padding: 6px;
+      text-align: center;
+      min-height: 56px;
+    }
+
+    .tile .label {
+      font-size: 12px;
+      color: #ffca5f;
+      letter-spacing: 1px;
+    }
+
+    .tile .value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.2;
+    }
+
+    #gameWrap {
+      position: relative;
+      padding: 12px;
+      background: #0a1020;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 3 / 4.4;
+      background: #1b4a2f;
+      border: 3px solid #000;
+      display: block;
+      image-rendering: pixelated;
+    }
+
+    .hud {
+      margin-top: 10px;
+      font-size: 13px;
+      text-align: center;
+      color: #ffd987;
+      text-shadow: 1px 1px #000;
+      min-height: 18px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    button {
+      flex: 1;
+      border: 2px solid #000;
+      background: #ffca5f;
+      color: #2f1900;
+      padding: 12px;
+      font: inherit;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: inset -2px -2px 0 0 #cc8f20;
+    }
+
+    button:active { transform: translateY(1px); }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+      margin-top: 8px;
+      font-size: 11px;
+      text-align: center;
+      color: #d7e7ff;
+    }
+
+    .legend span {
+      background: #121e36;
+      border: 1px solid #000;
+      padding: 3px;
+    }
+  </style>
+</head>
+<body>
+  <main class="cabinet">
+    <section class="scoreboard">
+      <div class="tile"><div class="label">RUNS</div><div class="value" id="runs">0</div></div>
+      <div class="tile"><div class="label">OUTS</div><div class="value" id="outs">0</div></div>
+      <div class="tile"><div class="label">INNING</div><div class="value" id="inning">1 ▲</div></div>
+    </section>
+
+    <section id="gameWrap">
+      <canvas id="game" width="360" height="540" aria-label="Retro baseball arcade game"></canvas>
+      <div class="hud" id="message">Press Space or Tap SWING to launch and hit!</div>
+      <div class="controls">
+        <button id="swingBtn">SWING / TAP</button>
+        <button id="launchBtn">NEW BALL</button>
+      </div>
+      <div class="legend">
+        <span>HR +1 RUN</span><span>3B</span><span>2B</span><span>1B</span><span>OUT +1</span>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const ui = {
+      runs: document.getElementById('runs'),
+      outs: document.getElementById('outs'),
+      inning: document.getElementById('inning'),
+      message: document.getElementById('message')
+    };
+
+    const W = canvas.width;
+    const H = canvas.height;
+
+    const gravity = 0.22;
+    const friction = 0.995;
+    let last = 0;
+
+    const game = {
+      runs: 0,
+      outs: 0,
+      inning: 1,
+      top: true,
+      batAngle: 0,
+      batCooldown: 0,
+      ballInPlay: true,
+      messageTimer: 0
+    };
+
+    const ball = {
+      x: W / 2,
+      y: H * 0.5,
+      vx: 0,
+      vy: 0,
+      r: 7,
+      active: true,
+      trail: []
+    };
+
+    const bat = {
+      x: W / 2,
+      y: H - 85,
+      length: 82,
+      width: 13,
+      swingPower: 9.6,
+      restingAngle: -0.2,
+      maxAngle: -1.4,
+      hitWindow: 14
+    };
+
+    const pockets = [
+      { x: W * 0.5, y: 74, r: 22, type: 'HR', color: '#ff5f59' },
+      { x: W * 0.2, y: 142, r: 19, type: '3B', color: '#63d471' },
+      { x: W * 0.8, y: 142, r: 19, type: '2B', color: '#74c5ff' },
+      { x: W * 0.2, y: H - 98, r: 20, type: 'OUT', color: '#d38cff' },
+      { x: W * 0.8, y: H - 98, r: 20, type: '1B', color: '#ffe066' }
+    ];
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function pxRect(x, y, w, h, fill, stroke = '#000') {
+      ctx.fillStyle = fill;
+      ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+
+    function launchBall() {
+      ball.x = W / 2;
+      ball.y = H * 0.5;
+      ball.vx = (Math.random() * 2 - 1) * 1.1;
+      ball.vy = -1.6;
+      ball.active = true;
+      ball.trail.length = 0;
+      game.ballInPlay = true;
+      popMessage('Ball launched from center!');
+      playTone(520, 0.06, 'square');
+    }
+
+    function swing() {
+      if (game.batCooldown > 0) return;
+      game.batCooldown = 11;
+      game.batAngle = bat.maxAngle;
+      playTone(180, 0.08, 'sawtooth');
+
+      const dx = ball.x - bat.x;
+      const dy = ball.y - bat.y;
+      const dist = Math.hypot(dx, dy);
+      if (ball.active && dist < bat.hitWindow + ball.r) {
+        const angle = -Math.PI / 2 + (dx / bat.length) * 0.65;
+        const power = bat.swingPower + Math.random() * 1.5;
+        ball.vx = Math.cos(angle) * power;
+        ball.vy = Math.sin(angle) * power - 2.6;
+        playTone(760, 0.09, 'triangle');
+        popMessage('CRACK! Nice hit!');
+      }
+    }
+
+    function handlePocket(type) {
+      let text = '';
+      if (type === 'OUT') {
+        game.outs += 1;
+        text = 'OUT!';
+        playTone(120, 0.2, 'square');
+        if (game.outs >= 3) {
+          game.outs = 0;
+          game.top = !game.top;
+          if (game.top) game.inning += 1;
+          text = `Three outs! Inning ${game.inning} ${game.top ? '▲' : '▼'}`;
+        }
+      } else {
+        const runs = type === 'HR' ? 1 : 0;
+        game.runs += runs;
+        text = type === 'HR' ? 'HOME RUN! +1 RUN' : `${type} HIT!`;
+        playTone(type === 'HR' ? 980 : 620, 0.15, 'triangle');
+      }
+
+      ball.active = false;
+      game.ballInPlay = false;
+      popMessage(text);
+      setTimeout(() => {
+        if (!game.ballInPlay) launchBall();
+      }, 700);
+      updateUI();
+    }
+
+    function popMessage(text) {
+      ui.message.textContent = text;
+      game.messageTimer = 130;
+    }
+
+    function updateUI() {
+      ui.runs.textContent = game.runs;
+      ui.outs.textContent = game.outs;
+      ui.inning.textContent = `${game.inning} ${game.top ? '▲' : '▼'}`;
+    }
+
+    function update() {
+      if (game.batCooldown > 0) {
+        game.batCooldown -= 1;
+      } else {
+        game.batAngle += (bat.restingAngle - game.batAngle) * 0.2;
+      }
+
+      if (!ball.active) return;
+
+      ball.vy += gravity;
+      ball.vx *= friction;
+      ball.vy *= friction;
+
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+
+      ball.trail.push({ x: ball.x, y: ball.y });
+      if (ball.trail.length > 8) ball.trail.shift();
+
+      if (ball.x < ball.r + 5 || ball.x > W - ball.r - 5) {
+        ball.vx *= -0.9;
+        ball.x = clamp(ball.x, ball.r + 5, W - ball.r - 5);
+        playTone(320, 0.03, 'square');
+      }
+      if (ball.y < ball.r + 5 || ball.y > H - ball.r - 5) {
+        ball.vy *= -0.9;
+        ball.y = clamp(ball.y, ball.r + 5, H - ball.r - 5);
+        playTone(320, 0.03, 'square');
+      }
+
+      for (const p of pockets) {
+        const dx = ball.x - p.x;
+        const dy = ball.y - p.y;
+        if (Math.hypot(dx, dy) < p.r - 4) {
+          handlePocket(p.type);
+          break;
+        }
+      }
+    }
+
+    function drawStadium() {
+      ctx.fillStyle = '#2f8e40';
+      ctx.fillRect(0, 0, W, H);
+
+      for (let i = 0; i < 12; i++) {
+        ctx.fillStyle = i % 2 ? '#2b7f3a' : '#318f43';
+        ctx.fillRect(i * 30, 0, 30, H);
+      }
+
+      ctx.fillStyle = '#264f8f';
+      ctx.fillRect(0, 0, W, 90);
+
+      for (let i = 0; i < 24; i++) {
+        pxRect(4 + (i % 12) * 30, 10 + Math.floor(i / 12) * 24, 24, 16, i % 2 ? '#ffd166' : '#a0c4ff');
+      }
+
+      ctx.fillStyle = '#9b4f28';
+      ctx.beginPath();
+      ctx.ellipse(W / 2, H - 70, 100, 48, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#f5f5f5';
+      ctx.fillRect(W / 2 - 3, H - 76, 6, 6);
+    }
+
+    function drawPockets() {
+      pockets.forEach((p) => {
+        ctx.beginPath();
+        ctx.fillStyle = '#000';
+        ctx.arc(p.x + 2, p.y + 2, p.r + 1, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.fillStyle = p.color;
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        ctx.fillStyle = '#05111f';
+        ctx.font = 'bold 13px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.type, p.x, p.y + 1);
+      });
+    }
+
+    function drawBat() {
+      ctx.save();
+      ctx.translate(bat.x, bat.y);
+      ctx.rotate(game.batAngle);
+      pxRect(0, -bat.width / 2, bat.length, bat.width, '#f4bd78');
+      pxRect(-10, -bat.width / 2 - 2, 12, bat.width + 4, '#8b4b1c');
+      ctx.restore();
+
+      ctx.fillStyle = '#fff4d6';
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('(BAT)', bat.x, bat.y + 28);
+    }
+
+    function drawBall() {
+      for (let i = 0; i < ball.trail.length; i++) {
+        const t = ball.trail[i];
+        const alpha = i / ball.trail.length;
+        ctx.globalAlpha = alpha * 0.35;
+        ctx.beginPath();
+        ctx.fillStyle = '#f7f7f7';
+        ctx.arc(t.x, t.y, ball.r * (0.4 + alpha * 0.5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      ctx.beginPath();
+      ctx.fillStyle = '#fff';
+      ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.strokeStyle = '#db3e3e';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(ball.x - 2, ball.y, ball.r - 2, 0.6, 2.5);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(ball.x + 2, ball.y, ball.r - 2, -2.5, -0.6);
+      ctx.stroke();
+    }
+
+    function render() {
+      drawStadium();
+      drawPockets();
+      drawBat();
+      if (ball.active) drawBall();
+
+      if (game.messageTimer > 0) {
+        game.messageTimer -= 1;
+      } else {
+        ui.message.textContent = game.ballInPlay
+          ? 'Aim your swing! Space / tap to hit the ball.'
+          : 'Tap NEW BALL if auto-launch pauses.';
+      }
+    }
+
+    function tick(ts) {
+      const dt = ts - last;
+      last = ts;
+      const steps = Math.min(3, Math.max(1, Math.round(dt / 16)));
+      for (let i = 0; i < steps; i++) update();
+      render();
+      requestAnimationFrame(tick);
+    }
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playTone(freq, duration = 0.08, type = 'square') {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      gain.gain.value = 0.001;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      const now = audioCtx.currentTime;
+      gain.gain.exponentialRampToValueAtTime(0.15, now + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+      osc.start(now);
+      osc.stop(now + duration + 0.01);
+    }
+
+    function ensureAudio() {
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        ensureAudio();
+        swing();
+      }
+    }, { passive: false });
+
+    const touchSwing = (e) => {
+      e.preventDefault();
+      ensureAudio();
+      swing();
+    };
+
+    canvas.addEventListener('pointerdown', touchSwing, { passive: false });
+    document.getElementById('swingBtn').addEventListener('pointerdown', touchSwing, { passive: false });
+    document.getElementById('launchBtn').addEventListener('click', () => {
+      ensureAudio();
+      launchBall();
+    });
+
+    updateUI();
+    launchBall();
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
